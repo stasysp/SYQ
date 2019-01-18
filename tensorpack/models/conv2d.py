@@ -57,10 +57,10 @@ def Conv2D(x, out_channel, kernel_shape,
     else:
         inputs = tf.split(3, split, x)
         kernels = tf.split(3, split, W)
-        outputs = [tf.nn.conv2d(i, k, stride, padding) for i, k in zip(inputs, kernels)]
-        conv = tf.concat(3, outputs)
         # inputs = tf.split(x, split, 3)
         # kernels = tf.split(W, split, 3)
+        outputs = [tf.nn.conv2d(i, k, stride, padding) for i, k in zip(inputs, kernels)]
+        conv = tf.concat(3, outputs)
         # conv = tf.concat(outputs, 3)
     if nl is None:
         logger.warn("[DEPRECATED] Default ReLU nonlinearity for Conv2D and FullyConnected will be deprecated. Please use argscope instead.")
