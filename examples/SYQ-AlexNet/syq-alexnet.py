@@ -25,7 +25,7 @@ FRAC = 4
 PATH = ''
 
 #Enter Path to floatingpoint_alexnet.npy downloaded from Google Drive
-PATH_float = ''
+PATH_float = 'floatingpoint_alexnet.npy'
 
 if INITIAL:
     d = np.load(PATH_float).item()
