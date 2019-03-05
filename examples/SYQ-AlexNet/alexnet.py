@@ -16,7 +16,6 @@ from tensorpack.tfutils.symbolic_functions import *
 from tensorpack.tfutils.summary import *
 #from quantize import *
 from tensorpack.utils.stats import RatioCounter
-from tensorpack.tfutils import sessinit, varmanip
 
 TOTAL_BATCH_SIZE = 32
 BATCH_SIZE = 32
@@ -27,14 +26,11 @@ BITA = 8
 FRAC = 4
 PATH = ''
 
-#Enter Path to floatingpoint_alexnet.npy downloaded from Google Drive
-PATH_float = 'floatingpoint_alexnet.npy'
+PATH_float = '../floatingpoint_alexnet.npy'
 
 if INITIAL:
     d = np.load(PATH_float, encoding='latin1').item()
-
     weights = {}
-
     #calculate initialization for scaling coefficients
     for i in d.keys():
         if '/W:' in i and 'conv' in i:
@@ -54,24 +50,10 @@ class Model(ModelDesc):
     def _build_graph(self, input_vars):
         image, label = input_vars
         image = image / 255.0
-
-#         # monkey-patch tf.get_variable to apply fw
-#         old_get_variable = tf.get_variable
-#         def new_get_variable(name, shape=None, **kwargs):
-#             v = old_get_variable(name, shape, **kwargs)
-        
-#             # don't binarize first and last layer
-#             if name != 'W' or 'conv0' in v.op.name or 'fct' in v.op.name:
-#                 return v
-#             else:
-#                 print("**********  ", name,shape, kwargs)
-#                 return fine_grained_quant(v, args.eta, v.op.name, INITIAL, weights)
-#         tf.get_variable = new_get_variable
+        pass
 
         def activate(x):
             x = tf.nn.relu(x)
-            #x = tf.clip_by_value(x,0,1)
-            #x = quantize(x, BITA, None)
             return x
 
         with argscope(BatchNorm, decay=0.9, epsilon=1e-4), \
@@ -138,28 +120,15 @@ def get_data(dataset_name):
             def __init__(self):
                 self._init(locals())
             def _augment(self, img, _):
-                #print('here')
-                # h, w = img.shape[:2]
-                # size = INP_SIZE
-                # scale = self.rng.randint(size, 308) * 1.0 / min(h, w)
-                # scaleX = scale * self.rng.uniform(0.85, 1.15)
-                # scaleY = scale * self.rng.uniform(0.85, 1.15)
-                # desSize = map(int, (max(size, min(w, scaleX * w)),
-                #     max(size, min(h, scaleY * h))))
-                # dst = cv2.resize(img, tuple(desSize),
-                #      interpolation=cv2.INTER_CUBIC)
-                # return dst
                 return  cv2.resize(img, (INP_SIZE, INP_SIZE),
                       interpolation=cv2.INTER_CUBIC)
 
         augmentors = [
-            #Resize(),
-            #imgaug.RandomCrop((INP_SIZE, INP_SIZE)),
             imgaug.RandomCrop((INP_SIZE - 10, INP_SIZE - 10)),
-            imgaug.RotationAndCropValid(10),
+            imgaug.RotationAndCropValid(20),
             Resize(),
             imgaug.Flip(horiz=True),
-            #imgaug.GaussianBlur(),
+            imgaug.GaussianBlur(),
             imgaug.Brightness(10),
             #imgaug.Contrast(0.1),
             #imgaug.Gamma(),
@@ -175,17 +144,7 @@ def get_data(dataset_name):
             #imgaug.MapImage(lambda x: x - pp_mean_224),
         ]
     else:
-        def resize_func(im):
-            print('here2')
-            h, w = im.shape[:2]
-            scale = 256.0 / min(h, w)
-            desSize = map(int, (max(INP_SIZE, min(w, scale * w)),\
-                                max(INP_SIZE, min(h, scale * h))))
-            im = cv2.resize(im, tuple(desSize), interpolation=cv2.INTER_CUBIC)
-            return im
         augmentors = [
-            #imgaug.MapImage(resize_func),
-            #imgaug.MapImage(lambda x: x - pp_mean_224),
             imgaug.MeanVarianceNormalize(),
         ]
     ds = AugmentImageComponent(ds, augmentors)
@@ -211,8 +170,6 @@ def get_config(learning_rate, num_epochs, inf_epochs):
 
     lr = get_scalar_var('learning_rate', learning_rate[0], summary=True)
 
-   # lr = tf.Variable(4e-6, trainable=False, name='learning_rate')
-    #tf.scalar_summary('learning_rate', lr)
 
     total_epochs = np.arange(1, (num_epochs[-1] + 1))
     do_epochs = np.append(inf_epochs, total_epochs[num_epochs[-2]:])
@@ -303,7 +260,7 @@ if __name__ == '__main__':
     parser.add_argument('--eta', type=float, default=0.05)
     parser.add_argument('--learning-rate', type=float, nargs='+', metavar='LR', default=[1e-3, 2e-5, 4e-6],
             help='Learning rates to use during training, first value is the initial learning rate (default: %(default)s). Must have the same number of args as --num-epochs')
-    parser.add_argument('--num-epochs', type=int, nargs='+', metavar='E', default=[1000000, 64, 100],
+    parser.add_argument('--num-epochs', type=int, nargs='+', metavar='E', default=[100000, 150, 200],
             help='Epochs to change the learning rate, last value is the maximum number of epochs (default: %(default)s). Must have the same number of args as --learning-rate')
     parser.add_argument('--inf-epochs', type=int, nargs='+', metavar='I', default=list(np.arange(1,121)))
     parser.add_argument('--eval', type=str, default=None, choices=['val', 'test'],
@@ -340,4 +297,3 @@ if __name__ == '__main__':
     if args.gpu:
         config.nr_tower = len(args.gpu.split(','))
     SyncMultiGPUTrainer(config).train()
-    varmanip.dump_session_params('alexnet_v01.npy')
