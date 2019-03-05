@@ -159,6 +159,15 @@ def get_data(dataset_name):
             # imgaug.SaltPepperNoise()
             # imgaug.MapImage(lambda x: x - pp_mean_224),
         ]
+    else:
+        def resize_func(im):
+            print('here2')
+            h, w = im.shape[:2]
+            scale = 256.0 / min(h, w)
+            desSize = map(int, (max(INP_SIZE, min(w, scale * w)), \
+                                max(INP_SIZE, min(h, scale * h))))
+            im = cv2.resize(im, tuple(desSize), interpolation=cv2.INTER_CUBIC)
+            return im
 
         augmentors = [
             imgaug.MeanVarianceNormalize(),
