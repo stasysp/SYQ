@@ -20,6 +20,7 @@ INITIAL = True
 BITA = 8
 FRAC = 4
 PATH = ''
+use_local_stat = True
 
 PATH_float = '../floatingpoint_alexnet.npy'
 
@@ -37,7 +38,7 @@ if INITIAL:
 else:
     weights = None
 
-from tensorpack.models import BatchNorm, BNReLU, Conv2D, FullyConnected, GlobalAvgPooling, MaxPooling
+from tensorpack.models import BatchNormV2, BNReLU, Conv2D, FullyConnected, GlobalAvgPooling, MaxPooling
 from tensorpack.tfutils.argscope import argscope, get_arg_scope
 
 def activate(x):
@@ -45,12 +46,13 @@ def activate(x):
     return x   
 
 def resnet_shortcut(l, n_out, stride, activation=tf.identity):
+    global use_local_stat
     #data_format = get_arg_scope()['Conv2D']['data_format']
     n_in = l.shape[3] #l.get_shape().as_list()[1 if data_format in ['NCHW', 'channels_first'] else 3]
     #print(n_in)
     if n_in != n_out:   # change dimension when channel is not the same   
         l = Conv2D('convshortcut', l, n_out, 1, stride=stride)#, activation=activation)
-        l = BatchNorm('convshortcut', l)
+        l = BatchNormV2('convshortcut', l, use_local_stat=use_local_stat)
         return activate(l)
     else:
         return l
@@ -60,24 +62,26 @@ def get_bn(x, zero_init=False):
     """
     Zero init gamma is good for resnet. See https://arxiv.org/abs/1706.02677.
     """
+    global use_local_stat
     if zero_init:
         #return lambda x, name=None: BatchNorm('bn', x, gamma_initializer=tf.zeros_initializer())
-        return BatchNorm('bn_z', x) #, gamma_initializer=tf.zeros_initializer())
+        return BatchNormV2('bn_z', x, use_local_stat=use_local_stat) #, gamma_initializer=tf.zeros_initializer())
     else:
         #return lambda x, name=None: BatchNorm('bn', x)
-        return BatchNorm('bn', x)
+        return BatchNormV2('bn', x, use_local_stat=use_local_stat)
 
 
 def resnet_bottleneck(l, ch_out, stride, stride_first=False):
     """
     stride_first: original resnet put stride on first conv. fb.resnet.torch put stride on second conv.
     """
+    global use_local_stat
     shortcut = l
     l = Conv2D('conv1', l, ch_out, 1, stride=stride if stride_first else 1)#.apply(BNReLU)
-    l = BatchNorm('bn1', l)
+    l = BatchNormV2('bn1', l, use_local_stat=use_local_stat)
     l = activate(l)
     l = Conv2D('conv2', l, ch_out, 3, stride=1 if stride_first else stride)#.apply(BNReLU)
-    l = BatchNorm('bn2', l)
+    l = BatchNormV2('bn2', l, use_local_stat=use_local_stat)
     l = activate(l)
     l = get_bn(Conv2D('conv3', l, ch_out * 4, 1), zero_init=True)
 
@@ -116,11 +120,11 @@ class Model(ModelDesc):
         image = image / 255.0
         pass
 
-        def activate(x):
-            x = BNReLU(x) #tf.nn.relu(x) #BNReLU(x) #
-            return x
+#         def activate(x):
+#             x = BNReLU(x) #tf.nn.relu(x) #BNReLU(x) #
+#             return x
         
-        with argscope([Conv2D, MaxPooling, GlobalAvgPooling, BatchNorm]):
+        with argscope([Conv2D, MaxPooling, GlobalAvgPooling, BatchNormV2]):
             #image = LinearWrap(image)
             logits = resnet_backbone(
                 image, [3, 4, 6, 3],
@@ -131,6 +135,7 @@ class Model(ModelDesc):
         prob = tf.nn.softmax(logits, name='output')
 
         cost = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=label)
+        self.cost = tf.reduce_mean(cost, name='cost') #cost #tf.Variable(cost, name='cost') #
         cost = tf.reduce_mean(cost, name='cross_entropy_loss')
 
         wrong = prediction_incorrect(logits, label, 1, name='wrong-top1')
@@ -139,13 +144,13 @@ class Model(ModelDesc):
         add_moving_summary(tf.reduce_mean(wrong, name='train-error-top5'))
 
         # weight decay on all W of fc layers
-        wd_cost = regularize_cost('fc.*/W', l2_regularizer(5e-6))
+        #wd_cost = regularize_cost('linear.*/W', l2_regularizer(5e-6))
         #add_moving_summary(cost, wd_cost) #########
         
         add_param_summary([('.*/W', ['histogram', 'rms'])])
         #print(cost)
         #print(wd_cost)
-        self.cost = tf.add_n([cost, float(wd_cost)], name='cost')
+     
 
 def get_data(dataset_name):
     isTrain = dataset_name == 'train'
@@ -277,6 +282,8 @@ def run_image(model, sess_init, inputs):
         print(list(zip(names, prob[ret])))
 
 def eval_on_ILSVRC12(model_path, data_dir, ds_type):
+    global use_local_stat
+    use_local_stat = False
     ds = get_data(ds_type)
     pred_config = PredictConfig(
         model=Model(),
@@ -292,6 +299,7 @@ def eval_on_ILSVRC12(model_path, data_dir, ds_type):
         acc5.feed(o[1].sum(), batch_size)
     print("Top1 Error: {}".format(acc1.ratio))
     print("Top5 Error: {}".format(acc5.ratio))
+    use_local_stat = True
 
 
 if __name__ == '__main__':
@@ -302,7 +310,7 @@ if __name__ == '__main__':
                         #default='/home/stasysp/Envs/Datasets/ImageNet')
     parser.add_argument('--run', help='run on a list of images with the pretrained model', nargs='*')
     parser.add_argument('--eta', type=float, default=0)
-    parser.add_argument('--learning-rate', type=float, nargs='+', metavar='LR', default=[1e-3, 1e-3, 1e-3],
+    parser.add_argument('--learning-rate', type=float, nargs='+', metavar='LR', default=[1e-2, 1e-2, 1e-2],
             help='Learning rates to use during training, first value is the initial learning rate (default: %(default)s). Must have the same number of args as --num-epochs')
     parser.add_argument('--num-epochs', type=int, nargs='+', metavar='E', default=[100000, 150, 200],
             help='Epochs to change the learning rate, last value is the maximum number of epochs (default: %(default)s). Must have the same number of args as --learning-rate')
