@@ -48,19 +48,12 @@ def resnet_shortcut(l, n_out, stride, activation=tf.identity):
     #data_format = get_arg_scope()['Conv2D']['data_format']
     n_in = l.shape[3] #l.get_shape().as_list()[1 if data_format in ['NCHW', 'channels_first'] else 3]
     #print(n_in)
-    if n_in != n_out:   # change dimension when channel is not the same          
-        return activate(Conv2D('convshortcut', l, n_out, 1, stride=stride))#, activation=activation)
+    if n_in != n_out:   # change dimension when channel is not the same   
+        l = Conv2D('convshortcut', l, n_out, 1, stride=stride)#, activation=activation)
+        l = BatchNorm('convshortcut', l)
+        return activate(l)
     else:
         return l
-
-
-def apply_preactivation(l, preact):
-    if preact == 'bnrelu':
-        shortcut = l    # preserve identity mapping
-        l = BNReLU('preact', l)
-    else:
-        shortcut = l
-    return l, shortcut
 
 
 def get_bn(x, zero_init=False):
@@ -69,84 +62,11 @@ def get_bn(x, zero_init=False):
     """
     if zero_init:
         #return lambda x, name=None: BatchNorm('bn', x, gamma_initializer=tf.zeros_initializer())
-        BatchNorm('bn', x, gamma_initializer=tf.zeros_initializer())
+        return BatchNorm('bn_z', x) #, gamma_initializer=tf.zeros_initializer())
     else:
         #return lambda x, name=None: BatchNorm('bn', x)
         return BatchNorm('bn', x)
 
-def preresnet_basicblock(l, ch_out, stride, preact):
-    l, shortcut = apply_preactivation(l, preact)
-    l = Conv2D('conv1', l, ch_out, 3, strides=stride, activation=BNReLU)
-    l = Conv2D('conv2', l, ch_out, 3)
-    return l + resnet_shortcut(shortcut, ch_out, stride)
-
-
-def preresnet_bottleneck(l, ch_out, stride, preact):
-    # stride is applied on the second conv, following fb.resnet.torch
-    l, shortcut = apply_preactivation(l, preact)
-    l = Conv2D('conv1', l, ch_out, 1, activation=BNReLU)
-    l = Conv2D('conv2', l, ch_out, 3, strides=stride, activation=BNReLU)
-    l = Conv2D('conv3', l, ch_out * 4, 1)
-    return l + resnet_shortcut(shortcut, ch_out * 4, stride)
-
-
-def preresnet_group(name, l, block_func, features, count, stride):
-    with tf.variable_scope(name):
-        for i in range(0, count):
-            with tf.variable_scope('block{}'.format(i)):
-                # first block doesn't need activation
-                l = block_func(l, features,
-                               stride if i == 0 else 1,
-                               'no_preact' if i == 0 else 'bnrelu')
-        # end of each group need an extra activation
-        l = BNReLU('bnlast', l)
-    return l
-
-
-def resnet_basicblock(l, ch_out, stride):
-    shortcut = l
-    l = Conv2D('conv1', l, ch_out, 3, strides=stride, activation=BNReLU)
-    l = Conv2D('conv2', l, ch_out, 3, activation=get_bn(zero_init=True))
-    out = l + resnet_shortcut(shortcut, ch_out, stride, activation=get_bn(zero_init=False))
-    return tf.nn.relu(out)
-
-
-def resnet_bottleneck(l, ch_out, stride, stride_first=False):
-    """
-    stride_first: original resnet put stride on first conv. fb.resnet.torch put stride on second conv.
-    """
-    shortcut = l
-    l = Conv2D('conv1', l, ch_out, 1, strides=stride if stride_first else 1, activation=BNReLU)
-    l = Conv2D('conv2', l, ch_out, 3, strides=1 if stride_first else stride, activation=BNReLU)
-    l = Conv2D('conv3', l, ch_out * 4, 1, activation=get_bn(zero_init=True))
-    out = l + resnet_shortcut(shortcut, ch_out * 4, stride, activation=get_bn(zero_init=False))
-    return tf.nn.relu(out)
-
-
-def se_resnet_bottleneck(l, ch_out, stride):
-    shortcut = l
-    l = Conv2D('conv1', l, ch_out, 1, activation=BNReLU)
-    l = Conv2D('conv2', l, ch_out, 3, strides=stride, activation=BNReLU)
-    l = Conv2D('conv3', l, ch_out * 4, 1, activation=get_bn(zero_init=True))
-
-    squeeze = GlobalAvgPooling('gap', l)
-    squeeze = FullyConnected('fc1', squeeze, ch_out // 4, activation=tf.nn.relu)
-    squeeze = FullyConnected('fc2', squeeze, ch_out * 4, activation=tf.nn.sigmoid)
-    data_format = get_arg_scope()['Conv2D']['data_format']
-    ch_ax = 1 if data_format in ['NCHW', 'channels_first'] else 3
-    shape = [-1, 1, 1, 1]
-    shape[ch_ax] = ch_out * 4
-    l = l * tf.reshape(squeeze, shape)
-    out = l + resnet_shortcut(shortcut, ch_out * 4, stride, activation=get_bn(zero_init=False))
-    return tf.nn.relu(out)
-
-
-def resnet_group(name, l, block_func, features, count, stride):
-    with tf.variable_scope(name):
-        for i in range(0, count):
-            with tf.variable_scope('block{}'.format(i)):
-                l = block_func(l, features, stride if i == 0 else 1)
-    return l
 
 def resnet_bottleneck(l, ch_out, stride, stride_first=False):
     """
@@ -154,11 +74,13 @@ def resnet_bottleneck(l, ch_out, stride, stride_first=False):
     """
     shortcut = l
     l = Conv2D('conv1', l, ch_out, 1, stride=stride if stride_first else 1)#.apply(BNReLU)
+    l = BatchNorm('bn1', l)
     l = activate(l)
     l = Conv2D('conv2', l, ch_out, 3, stride=1 if stride_first else stride)#.apply(BNReLU)
+    l = BatchNorm('bn2', l)
     l = activate(l)
-    l = activate(Conv2D('conv3', l, ch_out * 4, 1))#, activation=get_bn(zero_init=True))
-    #print(get_bn(resnet_shortcut(shortcut, ch_out * 4, stride), zero_init=False))
+    l = get_bn(Conv2D('conv3', l, ch_out * 4, 1), zero_init=True)
+
     out = l + get_bn(resnet_shortcut(shortcut, ch_out * 4, stride))
     return tf.nn.relu(out)
 
@@ -168,6 +90,7 @@ def resnet_group(name, l, block_func, features, count, stride):
             with tf.variable_scope('block{}'.format(i)):
                 l = block_func(l, features, stride if i == 0 else 1)
     return l
+
 
 def resnet_backbone(image, num_blocks, group_func, block_func):
     with argscope(Conv2D, use_bias=False): #kernel_initializer=tf.variance_scaling_initializer(scale=2.0, mode='fan_out')):
@@ -187,21 +110,21 @@ class Model(ModelDesc):
     def _get_input_vars(self):
         return [InputVar(tf.float32, [None, INP_SIZE, INP_SIZE, 3], 'input'),
                 InputVar(tf.int32, [None], 'label') ]
-
+    
     def _build_graph(self, input_vars):
         image, label = input_vars
         image = image / 255.0
         pass
 
         def activate(x):
-            x = tf.nn.relu(x) #BNReLU(x) #
+            x = BNReLU(x) #tf.nn.relu(x) #BNReLU(x) #
             return x
         
         with argscope([Conv2D, MaxPooling, GlobalAvgPooling, BatchNorm]):
             #image = LinearWrap(image)
             logits = resnet_backbone(
                 image, [3, 4, 6, 3],
-                preresnet_group, resnet_bottleneck)
+                resnet_group, resnet_bottleneck)
 
         #tf.get_variable = old_get_variable
 
@@ -217,12 +140,12 @@ class Model(ModelDesc):
 
         # weight decay on all W of fc layers
         wd_cost = regularize_cost('fc.*/W', l2_regularizer(5e-6))
-        #add_moving_summary(cost, wd_cost) ########## костыль
-
+        #add_moving_summary(cost, wd_cost) #########
+        
         add_param_summary([('.*/W', ['histogram', 'rms'])])
         #print(cost)
         #print(wd_cost)
-        self.cost = tf.add_n([cost, float(wd_cost)], name='cost') ########## костыль
+        self.cost = tf.add_n([cost, float(wd_cost)], name='cost')
 
 def get_data(dataset_name):
     isTrain = dataset_name == 'train'
@@ -270,6 +193,10 @@ def get_data(dataset_name):
         ds = PrefetchDataZMQ(ds, min(12, multiprocessing.cpu_count()))
     return ds
 
+def optimizer(lr):
+    #tf.summary.scalar('learning_rate-summary', lr)
+    return tf.train.MomentumOptimizer(lr, 0.9, use_nesterov=True)
+
 def get_config(learning_rate, num_epochs, inf_epochs):
     mod = sys.modules['__main__']
     basename = os.path.basename(mod.__file__)
@@ -293,7 +220,7 @@ def get_config(learning_rate, num_epochs, inf_epochs):
 
     return TrainConfig(
         dataset=data_train,
-        optimizer=tf.train.AdamOptimizer(lr),
+        optimizer=optimizer(lr),
         callbacks=Callbacks([
             StatPrinter(), ModelSaver(),
             #HumanHyperParamSetter('learning_rate'),
@@ -374,8 +301,8 @@ if __name__ == '__main__':
     parser.add_argument('--data', help='ILSVRC dataset dir', default='/home/stasysp/Envs/shad/SYQ/tiny-imagenet-200')
                         #default='/home/stasysp/Envs/Datasets/ImageNet')
     parser.add_argument('--run', help='run on a list of images with the pretrained model', nargs='*')
-    parser.add_argument('--eta', type=float, default=0.05)
-    parser.add_argument('--learning-rate', type=float, nargs='+', metavar='LR', default=[1e-3, 2e-5, 4e-6],
+    parser.add_argument('--eta', type=float, default=0)
+    parser.add_argument('--learning-rate', type=float, nargs='+', metavar='LR', default=[1e-3, 1e-3, 1e-3],
             help='Learning rates to use during training, first value is the initial learning rate (default: %(default)s). Must have the same number of args as --num-epochs')
     parser.add_argument('--num-epochs', type=int, nargs='+', metavar='E', default=[100000, 150, 200],
             help='Epochs to change the learning rate, last value is the maximum number of epochs (default: %(default)s). Must have the same number of args as --learning-rate')
@@ -414,4 +341,3 @@ if __name__ == '__main__':
     if args.gpu:
         config.nr_tower = len(args.gpu.split(','))
     SyncMultiGPUTrainer(config).train()
-
